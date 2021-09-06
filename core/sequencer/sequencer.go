@@ -1,6 +1,8 @@
 package sequencer
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/0xys/safeseq/models"
@@ -26,15 +28,22 @@ func (l *SortedWaitlist) Add(transaction *models.Transaction) bool {
 	return true
 }
 
-func (l *SortedWaitlist) Pop() (bool, *models.Transaction) {
+func (l *SortedWaitlist) Peek() *models.Transaction {
 	if len(l.dict) == 0 {
-		return false, nil
+		return nil
+	}
+	return l.txs[l.beginIndex]
+}
+
+func (l *SortedWaitlist) Pop() *models.Transaction {
+	if len(l.dict) == 0 {
+		return nil
 	}
 
 	tx := models.CopyTransaction(l.txs[l.beginIndex])
 	delete(l.dict, l.txs[l.beginIndex].Nonce)
 	l.beginIndex++
-	return true, tx
+	return tx
 }
 
 func (l *SortedWaitlist) Len() int {
@@ -73,6 +82,7 @@ type Sequencer struct {
 	lock        sync.Mutex
 	Waitlists   map[string]*SortedWaitlist // account id to waitlist mapping
 	SubmitQueue chan *models.Transaction
+	NextNonce   uint64
 
 	SuccessLists map[string]*models.Transaction
 	FailureLists map[string]*models.Transaction
@@ -85,24 +95,43 @@ func NewSequencer() *Sequencer {
 	}
 }
 
-func (s *Sequencer) Add(account string, tx *models.Transaction) bool {
+func (s *Sequencer) Add(account string, tx *models.Transaction) (bool, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	res := s.Waitlists[account].Add(tx)
-	if !res {
-		return false
+	if tx.Nonce < s.NextNonce {
+		err := fmt.Sprintf("Past nonce %d provided.", tx.Nonce)
+		return false, errors.New(err)
+	}
+
+	isNewNonce := s.Waitlists[account].Add(tx)
+	if !isNewNonce {
+		err := fmt.Sprintf("Nonce %d already waitlisted.", tx.Nonce)
+		return false, errors.New(err)
 	}
 
 	if len(s.SubmitQueue) > 10 {
-		return false
+		// wait until SubmitQueue is not congested
+		return false, nil
 	}
 
-	found, next := s.Waitlists[account].Pop()
-	if !found || next == nil {
-		return false
+	peeked := s.Waitlists[account].Peek()
+	if peeked == nil {
+		return false, nil
 	}
+
+	if s.NextNonce < peeked.Nonce {
+		// wait until the next nonce to be waitlisted
+		return false, nil
+	}
+
+	next := s.Waitlists[account].Pop()
+	if next == nil {
+		return false, nil
+	}
+
+	// enqueue next item in waitlist to SubmitQueue
 	s.SubmitQueue <- next
 
-	return true
+	return true, nil
 }
