@@ -73,6 +73,9 @@ type Sequencer struct {
 	lock        sync.Mutex
 	Waitlists   map[string]*SortedWaitlist // account id to waitlist mapping
 	SubmitQueue chan *models.Transaction
+
+	SuccessLists map[string]*models.Transaction
+	FailureLists map[string]*models.Transaction
 }
 
 func NewSequencer() *Sequencer {
@@ -88,6 +91,10 @@ func (s *Sequencer) Add(account string, tx *models.Transaction) bool {
 
 	res := s.Waitlists[account].Add(tx)
 	if !res {
+		return false
+	}
+
+	if len(s.SubmitQueue) > 10 {
 		return false
 	}
 
