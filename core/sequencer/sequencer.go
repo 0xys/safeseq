@@ -95,6 +95,19 @@ func NewSequencer() *Sequencer {
 	}
 }
 
+func (s *Sequencer) Run() {
+	for {
+		select {
+		case submitRequest := <-s.SubmitQueue:
+			fmt.Printf("%v submited\n", submitRequest.Id)
+		}
+	}
+}
+
+func (s *Sequencer) QueueLength() int {
+	return len(s.SubmitQueue)
+}
+
 func (s *Sequencer) Add(account string, tx *models.Transaction) (bool, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
